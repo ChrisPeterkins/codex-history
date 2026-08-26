@@ -6,11 +6,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chrispeterkins/codex-history/internal/data"
 )
 
-// sessionListItem represents either a date group header or a session entry.
 type sessionListItem struct {
 	isGroupHeader bool
 	groupLabel    string
@@ -28,8 +28,6 @@ func (m Model) sessionListItems() []sessionListItem {
 	}
 	return items
 }
-
-// --- Panel rendering ---
 
 func (m Model) renderProjectsPanel() string {
 	w := m.projectsWidth()
@@ -52,7 +50,6 @@ func (m Model) renderProjectsPanel() string {
 	visibleStart, visibleEnd := m.visibleRange(m.projectCursor, len(m.projects), h-3)
 	for i := visibleStart; i < visibleEnd; i++ {
 		p := m.projects[i]
-		// Build suffix with activity dot, session count, and history indicator
 		dot := activityDot(p.LastActive)
 		suffix := ""
 		if dot != "" {
@@ -64,7 +61,6 @@ func (m Model) renderProjectsPanel() string {
 		if p.HistoryOnly {
 			suffix += " ○"
 		}
-		// Truncate name to fit panel width (accounting for suffix, padding, border)
 		suffixWidth := lipgloss.Width(suffix)
 		maxNameWidth := w - 6 - suffixWidth // panel padding(4) + item border/padding(2)
 		if maxNameWidth < 4 {
@@ -89,7 +85,7 @@ func (m Model) renderProjectsPanel() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, items...)
 
-	return m.panelStyleFor(panelProjects).Width(w - 2).Height(h - 2).Render(content)
+	return m.panelStyleFor(panelProjects).Width(w - 2).Height(h - 2).MaxWidth(w).MaxHeight(h).Render(content)
 }
 
 func (m Model) renderSessionsPanel() string {
@@ -113,7 +109,6 @@ func (m Model) renderSessionsPanel() string {
 	} else {
 		flatItems := m.sessionListItems()
 
-		// Find which flat index corresponds to the cursor
 		cursorFlat := 0
 		for i, item := range flatItems {
 			if !item.isGroupHeader && item.origIdx == m.sessionCursor {
@@ -122,7 +117,6 @@ func (m Model) renderSessionsPanel() string {
 			}
 		}
 
-		// Date headings and sessions both occupy two rendered terminal rows.
 		visibleStart, visibleEnd := m.visibleRange(cursorFlat, len(flatItems), max(1, (h-3)/2))
 		for i := visibleStart; i < visibleEnd; i++ {
 			item := flatItems[i]
@@ -146,7 +140,6 @@ func (m Model) renderSessionsPanel() string {
 					s1 = dimSelectedItemStyle
 				}
 				line1 := s1.Width(w - 4).MaxWidth(w - 4).Render(truncateStr(date+"  "+stats, w-6))
-				// Preview elevated to normal brightness as pseudo-title
 				line2 := s1.Width(w - 4).MaxWidth(w - 4).Render(preview)
 				items = append(items, line1, line2)
 			} else {
@@ -163,7 +156,7 @@ func (m Model) renderSessionsPanel() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, items...)
 
-	return m.panelStyleFor(panelSessions).Width(w - 2).Height(h - 2).Render(content)
+	return m.panelStyleFor(panelSessions).Width(w - 2).Height(h - 2).MaxWidth(w).MaxHeight(h).Render(content)
 }
 
 func (m Model) renderConversationPanel() string {
@@ -198,7 +191,6 @@ func (m Model) renderConversationPanel() string {
 	if m.loading {
 		body = "\n\n" + emptyStyle.Width(w-6).Render(m.spinner.View()+" Loading session...")
 	} else if m.focus != panelConversation && len(m.messages) == 0 && m.sessionCursor < len(m.sessions) {
-		// Session peek: show preview when browsing sessions
 		s := m.sessions[m.sessionCursor]
 		peek := "\n\n" + timestampStyle.Render("  Preview") + "\n\n"
 		if s.Preview != "" {
@@ -215,26 +207,21 @@ func (m Model) renderConversationPanel() string {
 		body = m.applyLineHighlight(m.viewport.View(), w-6)
 	}
 
-	// Add scroll indicator
 	scrollbar := m.renderScrollbar(h - 3)
 	bodyWithScroll := lipgloss.JoinHorizontal(lipgloss.Top, body, " ", scrollbar)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, bodyWithScroll)
 
-	return m.panelStyleFor(panelConversation).Width(w - 2).Height(h - 2).Render(content)
+	return m.panelStyleFor(panelConversation).Width(w - 2).Height(h - 2).MaxWidth(w).MaxHeight(h).Render(content)
 }
 
-// --- Layout math ---
-
 func (m Model) projectsWidth() int {
-	// Single panel mode: take full width
 	if (m.fullScreen || m.width < breakpointNarrow) && m.focus == panelProjects {
 		return m.width
 	}
 	if m.fullScreen || m.width < breakpointNarrow {
 		return 0
 	}
-	// Two-panel mode at medium width
 	if m.width < breakpointMedium {
 		if m.focus == panelProjects {
 			return max(20, m.width*2/5)
@@ -245,14 +232,12 @@ func (m Model) projectsWidth() int {
 }
 
 func (m Model) sessionsWidth() int {
-	// Single panel mode: take full width
 	if (m.fullScreen || m.width < breakpointNarrow) && m.focus == panelSessions {
 		return m.width
 	}
 	if m.fullScreen || m.width < breakpointNarrow {
 		return 0
 	}
-	// Two-panel mode at medium width
 	if m.width < breakpointMedium {
 		if m.focus == panelProjects {
 			return m.width - m.projectsWidth()
@@ -263,7 +248,6 @@ func (m Model) sessionsWidth() int {
 }
 
 func (m Model) conversationWidth() int {
-	// Single panel mode: take full width
 	if (m.fullScreen || m.width < breakpointNarrow) && m.focus == panelConversation {
 		return m.width
 	}
@@ -301,7 +285,6 @@ func (m Model) visibleRange(cursor, total, height int) (int, int) {
 	return start, end
 }
 
-// sessionStatsLine builds a compact stats string for a session.
 func sessionStatsLine(s data.Session) string {
 	var parts []string
 
@@ -326,7 +309,6 @@ func sessionStatsLine(s data.Session) string {
 	return strings.Join(parts, " · ")
 }
 
-// panelStyleFor returns the appropriate border style for a panel.
 func (m Model) panelStyleFor(panel int) lipgloss.Style {
 	if m.focus == panel {
 		return activePanelStyle
@@ -334,14 +316,11 @@ func (m Model) panelStyleFor(panel int) lipgloss.Style {
 	return panelStyle
 }
 
-// renderScrollbar renders a vertical scroll indicator for the conversation viewport.
 func (m Model) renderScrollbar(height int) string {
 	if height <= 0 || m.viewport.TotalLineCount() <= m.viewport.Height {
-		// No scrollbar needed — content fits
 		return strings.TrimSuffix(strings.Repeat(" \n", height), "\n")
 	}
 
-	// Calculate thumb position
 	pct := m.viewport.ScrollPercent()
 	thumbPos := int(pct * float64(height-1))
 
@@ -356,11 +335,12 @@ func (m Model) renderScrollbar(height int) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderHeader renders the top header bar with logo and breadcrumb.
 func (m Model) renderHeader() string {
 	logo := headerStyle.Render(" ◈ Codex History")
+	if lipgloss.Width(logo)+2 >= m.width {
+		return ansi.Truncate(logo, m.width, "")
+	}
 
-	// Show update nudge if available
 	right := m.renderBreadcrumb()
 	if m.updateAvail != "" {
 		updateBadge := lipgloss.NewStyle().
@@ -376,27 +356,30 @@ func (m Model) renderHeader() string {
 		right = headerBreadcrumbStyle.Render(right) + " "
 	}
 
-	// Fill the middle with ─
 	logoLen := lipgloss.Width(logo)
 	rightLen := lipgloss.Width(right)
-	fillLen := m.width - logoLen - rightLen - 2
-	if fillLen < 3 {
-		fillLen = 3
+	maxRight := m.width - logoLen - 5
+	if maxRight <= 0 {
+		right, rightLen = "", 0
+	} else if rightLen > maxRight {
+		right = ansi.TruncateLeft(right, rightLen-maxRight+1, "…")
+		rightLen = lipgloss.Width(right)
 	}
+	fillLen := m.width - logoLen - rightLen - 2
 	fill := headerLineStyle.Render(" " + strings.Repeat("─", fillLen) + " ")
 
 	return logo + fill + right
 }
 
-// applyLineHighlight highlights the line of the nearest collapsible section
-// in the viewport output. Finds which section space-bar would target, then
-// highlights its actual line position — not just the visual center.
 func (m Model) applyLineHighlight(viewOutput string, maxWidth int) string {
 	if m.focus != panelConversation || viewOutput == "" {
 		return viewOutput
 	}
+	highlight := func(style lipgloss.Style, line string) string {
+		line = ansi.Truncate(strings.TrimRight(line, " "), max(1, maxWidth-2), "")
+		return style.Width(maxWidth).MaxWidth(maxWidth).Render(line)
+	}
 
-	// Search mode: highlight matching lines
 	if m.convSearchMode && len(m.convSearchMatches) > 0 {
 		lines := strings.Split(viewOutput, "\n")
 		matchSet := make(map[int]bool)
@@ -409,15 +392,14 @@ func (m Model) applyLineHighlight(viewOutput string, maxWidth int) string {
 		}
 		for i := range lines {
 			if i == currentRel {
-				lines[i] = selectedItemStyle.Width(maxWidth).Render(strings.TrimRight(lines[i], " "))
+				lines[i] = highlight(selectedItemStyle, lines[i])
 			} else if matchSet[i] {
-				lines[i] = dimSelectedItemStyle.Width(maxWidth).Render(strings.TrimRight(lines[i], " "))
+				lines[i] = highlight(dimSelectedItemStyle, lines[i])
 			}
 		}
 		return strings.Join(lines, "\n")
 	}
 
-	// Normal mode: highlight nearest collapsible section
 	key := m.nearestCollapsibleKey()
 	if key == "" {
 		return viewOutput
@@ -431,18 +413,14 @@ func (m Model) applyLineHighlight(viewOutput string, maxWidth int) string {
 		return viewOutput
 	}
 
-	// Only split when we actually need to modify a line
 	lines := strings.Split(viewOutput, "\n")
 	if relativeLine >= len(lines) {
 		return viewOutput
 	}
-	lines[relativeLine] = selectedItemStyle.Width(maxWidth).Render(
-		strings.TrimRight(lines[relativeLine], " "),
-	)
+	lines[relativeLine] = highlight(selectedItemStyle, lines[relativeLine])
 	return strings.Join(lines, "\n")
 }
 
-// activityDot returns a colored dot indicating project recency.
 func activityDot(lastActive time.Time) string {
 	if lastActive.IsZero() {
 		return ""
@@ -458,7 +436,6 @@ func activityDot(lastActive time.Time) string {
 	}
 }
 
-// filterSessions applies the current session filter.
 func (m Model) filterSessions(sessions []data.Session) []data.Session {
 	if m.sessionFilter == 0 {
 		return sessions // "all" — no filtering
@@ -471,7 +448,6 @@ func (m Model) filterSessions(sessions []data.Session) []data.Session {
 	for _, s := range sessions {
 		switch filterName {
 		case "code":
-			// Sessions with significant activity (proxy: >10 messages means tool use likely)
 			if s.MessageCount > 10 {
 				filtered = append(filtered, s)
 			}

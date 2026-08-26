@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
-// renderHelpOverlay renders a full keybinding reference as a centered modal.
 func (m Model) renderHelpOverlay() string {
 	sections := []struct {
 		title string
@@ -76,23 +76,30 @@ func (m Model) renderHelpOverlay() string {
 
 	lines = append(lines, timestampStyle.Render("Press ? or Esc to close"))
 
-	content := strings.Join(lines, "\n")
-
 	overlayW := helpOverlayWidth
 	overlayH := len(lines) + 2
 	if overlayW > m.width-4 {
 		overlayW = m.width - 4
 	}
+	if overlayH > m.height-2 {
+		overlayH = m.height - 2
+		lines = append(lines[:max(0, overlayH-3)], timestampStyle.Render("? / Esc to close"))
+	}
+	for i := range lines {
+		lines[i] = ansi.Truncate(lines[i], max(1, overlayW-4), "…")
+	}
+	content := strings.Join(lines, "\n")
 
 	box := helpOverlayStyle.
 		Width(overlayW).
 		Height(overlayH).
+		MaxWidth(m.width).
+		MaxHeight(m.height).
 		Render(content)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-// renderHelp renders the bottom status/help bar.
 func (m Model) renderHelp() string {
 	allPairs := []struct{ key, desc string }{
 		{"tab", "panel"},
@@ -106,7 +113,6 @@ func (m Model) renderHelp() string {
 		{"q", "quit"},
 	}
 
-	// Show fewer keybindings on narrow terminals
 	pairs := allPairs
 	if m.width < breakpointNarrow {
 		pairs = []struct{ key, desc string }{{"?", "help"}, {"q", "quit"}}
@@ -126,7 +132,6 @@ func (m Model) renderHelp() string {
 		items = append(items, helpKeyStyle.Render(p.key)+" "+helpDescStyle.Render(p.desc))
 	}
 
-	// Status flash message on the left
 	left := ""
 	if m.statusMessage != "" {
 		left = helpKeyStyle.Render(" " + m.statusMessage)
@@ -138,10 +143,9 @@ func (m Model) renderHelp() string {
 		strings.Join(items, statusBarStyle.Render("  ·  ")),
 	)
 
-	return statusBarStyle.Width(m.width).Render(bar)
+	return statusBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render(bar)
 }
 
-// renderBreadcrumb shows current location: Project › Date › Msg N/M.
 func (m Model) renderBreadcrumb() string {
 	var parts []string
 

@@ -10,12 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/chrispeterkins/codex-history/internal/config"
 	"github.com/chrispeterkins/codex-history/internal/data"
 )
 
-// Focus panels
 const (
 	panelProjects = iota
 	panelSessions
@@ -24,12 +24,10 @@ const (
 
 // Model is the top-level Bubble Tea model.
 type Model struct {
-	// Data
 	projects []data.Project
 	sessions []data.Session
 	messages []data.Message
 
-	// UI state
 	focus         int // which panel is active
 	projectCursor int
 	sessionCursor int
@@ -37,31 +35,25 @@ type Model struct {
 	ready         bool
 	fullScreen    bool
 
-	// Dimensions
 	width  int
 	height int
 
-	// Markdown renderer
 	renderer *glamour.TermRenderer
 
 	// Collapsible sections: key -> collapsed (true = collapsed)
 	collapsed        map[string]bool
 	collapsibleLines map[string]int // key → line number (populated during render)
 
-	// Help overlay
 	showHelp bool
 
-	// Loading spinner
 	spinner spinner.Model
 	loading bool
 
 	// Scroll position memory (sessionID → YOffset)
 	scrollPositions map[string]int
 
-	// Message jumping: line numbers where user messages start
 	userMessageLines []int
 
-	// Search
 	searchMode    bool
 	searchInput   textinput.Model
 	searchResults []SearchResult
@@ -79,18 +71,14 @@ type Model struct {
 	convSearchContent []string // cached content lines (set on search entry)
 	convSearchIdx     int      // current match index
 
-	// Session filter
 	sessionFilter int // index into sessionFilterTypes
 
-	// Status flash message
 	statusMessage string
 	statusExpiry  time.Time
 
-	// Version
 	version     string
 	updateAvail string // non-empty if a newer version exists
 
-	// Theme
 	themeIndex int
 }
 
@@ -122,11 +110,9 @@ func NewModel(version string) Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#88C0D0"))
 
-	// Load saved theme preference
 	themeIdx := 0
 	cfg := config.Get()
 	if strings.EqualFold(cfg.Theme, "custom") && cfg.CustomTheme != nil {
-		// Apply custom theme from config
 		custom := buildCustomTheme(cfg.CustomTheme)
 		themes = append(themes, custom)
 		themeIdx = len(themes) - 1
@@ -141,7 +127,6 @@ func NewModel(version string) Model {
 		}
 	}
 
-	// Load saved filter preference
 	filterIdx := 0
 	filterName := config.DefaultFilterName()
 	for i, ft := range sessionFilterTypes {
@@ -244,12 +229,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.collapsed = make(map[string]bool)
 		m.updateConversationContent()
-		// Pending mark jump takes priority
 		if m.pendingMarkOffset != nil {
 			m.viewport.SetYOffset(*m.pendingMarkOffset)
 			m.pendingMarkOffset = nil
 		} else if m.sessionCursor < len(m.sessions) {
-			// Restore scroll position if we've been here before
 			if offset, ok := m.scrollPositions[m.sessions[m.sessionCursor].ID]; ok {
 				m.viewport.SetYOffset(offset)
 			} else {
@@ -290,7 +273,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Update viewport if in conversation panel
 	if m.focus == panelConversation {
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -306,16 +288,15 @@ func (m Model) View() string {
 	}
 
 	if m.showHelp {
-		return m.renderHelpOverlay()
+		return fitToScreen(m.renderHelpOverlay(), m.width, m.height)
 	}
 
 	if m.searchMode {
-		return m.renderSearchView()
+		return fitToScreen(m.renderSearchView(), m.width, m.height)
 	}
 
 	var main string
 	if m.fullScreen || m.width < breakpointNarrow {
-		// Full-screen or very narrow: show whichever panel is focused
 		switch m.focus {
 		case panelProjects:
 			main = m.renderProjectsPanel()
@@ -325,7 +306,6 @@ func (m Model) View() string {
 			main = m.renderConversationPanel()
 		}
 	} else if m.width < breakpointMedium {
-		// Medium width: show 2 panels — the focused one and its neighbor
 		switch m.focus {
 		case panelProjects:
 			main = lipgloss.JoinHorizontal(lipgloss.Top,
@@ -335,7 +315,6 @@ func (m Model) View() string {
 				m.renderSessionsPanel(), m.renderConversationPanel())
 		}
 	} else {
-		// Wide: full three-panel layout
 		projectsPanel := m.renderProjectsPanel()
 		sessionsPanel := m.renderSessionsPanel()
 		convoPanel := m.renderConversationPanel()
@@ -345,10 +324,27 @@ func (m Model) View() string {
 	header := m.renderHeader()
 	help := m.renderHelp()
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, main, help)
+	return fitToScreen(lipgloss.JoinVertical(lipgloss.Left, header, main, help), m.width, m.height)
 }
 
-// statusClearMsg clears the flash message.
+func fitToScreen(view string, width, height int) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for len(lines) < height {
+		lines = append(lines, "")
+	}
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, width, "")
+		lines[i] += strings.Repeat(" ", width-lipgloss.Width(lines[i]))
+	}
+	return strings.Join(lines, "\n")
+}
+
 type statusClearMsg struct{}
 
 func clearStatusAfter(d time.Duration) tea.Cmd {

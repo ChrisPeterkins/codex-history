@@ -49,11 +49,9 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Update text input
 	var cmd tea.Cmd
 	m.searchInput, cmd = m.searchInput.Update(msg)
 
-	// Trigger search on input change
 	query := m.searchInput.Value()
 	if query != "" && len(query) >= minSearchQueryLen {
 		return m, tea.Batch(cmd, m.searchCmd(query))
@@ -78,7 +76,6 @@ func (m Model) searchCmd(query string) tea.Cmd {
 				continue
 			}
 			for si, session := range sessions {
-				// Search in preview text and project name
 				searchText := strings.ToLower(session.Preview + " " + project.Name)
 				if fuzzyMatch(searchText, query) {
 					results = append(results, SearchResult{
@@ -136,13 +133,11 @@ func (m Model) renderSearchView() string {
 	w := m.width - 4
 	h := m.height
 
-	// Header
 	title := panelTitleActiveStyle.Render("Search")
 	input := m.searchInput.View()
 
 	header := title + "\n\n" + "  " + input + "\n"
 
-	// Results
 	var resultLines []string
 	for i, r := range m.searchResults {
 		prefix := "  "
@@ -155,8 +150,8 @@ func (m Model) renderSearchView() string {
 			descStyle = selectedItemDescStyle
 		}
 
-		line1 := style.Width(w).Render(prefix + r.Project + "  " + r.Date)
-		line2 := descStyle.Width(w).Render("  " + truncateStr(r.Preview, w-4))
+		line1 := style.Width(w).MaxWidth(w).Render(prefix + r.Project + "  " + r.Date)
+		line2 := descStyle.Width(w).MaxWidth(w).Render("  " + truncateStr(r.Preview, w-4))
 		resultLines = append(resultLines, line1, line2)
 
 		if len(resultLines) > h-8 {
@@ -177,8 +172,8 @@ func (m Model) renderSearchView() string {
 		helpKeyStyle.Render("esc") + " " + helpDescStyle.Render("close")
 
 	return lipgloss.JoinVertical(lipgloss.Left,
-		activePanelStyle.Width(m.width-2).Height(h-2).Render(content),
-		statusBarStyle.Width(m.width).Render("  "+help),
+		activePanelStyle.Width(m.width-2).Height(h-3).MaxWidth(m.width).MaxHeight(h-1).Render(content),
+		statusBarStyle.Width(m.width).MaxWidth(m.width).MaxHeight(1).Render("  "+help),
 	)
 }
 
