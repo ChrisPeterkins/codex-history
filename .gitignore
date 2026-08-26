@@ -1,0 +1,14 @@
+# Binary
+codex-history
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Codex config (local development instructions)
+AGENTS.md
