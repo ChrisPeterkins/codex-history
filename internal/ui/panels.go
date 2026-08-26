@@ -18,6 +18,17 @@ type sessionListItem struct {
 	origIdx       int
 }
 
+func (m Model) sessionListItems() []sessionListItem {
+	var items []sessionListItem
+	for _, group := range GroupSessionsByDate(m.filterSessions(m.sessions)) {
+		items = append(items, sessionListItem{isGroupHeader: true, groupLabel: group.Label})
+		for _, session := range group.Sessions {
+			items = append(items, sessionListItem{session: session.Session, origIdx: session.OriginalIndex})
+		}
+	}
+	return items
+}
+
 // --- Panel rendering ---
 
 func (m Model) renderProjectsPanel() string {
@@ -38,7 +49,7 @@ func (m Model) renderProjectsPanel() string {
 		items = append(items, noData)
 	}
 
-	visibleStart, visibleEnd := m.visibleRange(m.projectCursor, len(m.projects), h-2)
+	visibleStart, visibleEnd := m.visibleRange(m.projectCursor, len(m.projects), h-3)
 	for i := visibleStart; i < visibleEnd; i++ {
 		p := m.projects[i]
 		// Build suffix with activity dot, session count, and history indicator
@@ -78,7 +89,7 @@ func (m Model) renderProjectsPanel() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, items...)
 
-	return m.panelStyleFor(panelProjects).Width(w).Height(h).Render(content)
+	return m.panelStyleFor(panelProjects).Width(w - 2).Height(h - 2).Render(content)
 }
 
 func (m Model) renderSessionsPanel() string {
@@ -100,18 +111,7 @@ func (m Model) renderSessionsPanel() string {
 	if len(m.sessions) == 0 {
 		items = append(items, "\n"+emptyLogoStyle.Width(w-4).Render("◈")+"\n"+emptyStyle.Width(w-4).Render("No sessions"))
 	} else {
-		groups := GroupSessionsByDate(m.filterSessions(m.sessions))
-		// Flatten groups into displayable items with cursor tracking
-		var flatItems []sessionListItem
-		for _, g := range groups {
-			flatItems = append(flatItems, sessionListItem{isGroupHeader: true, groupLabel: g.Label})
-			for _, is := range g.Sessions {
-				flatItems = append(flatItems, sessionListItem{
-					session: is.Session,
-					origIdx: is.OriginalIndex,
-				})
-			}
-		}
+		flatItems := m.sessionListItems()
 
 		// Find which flat index corresponds to the cursor
 		cursorFlat := 0
@@ -122,7 +122,8 @@ func (m Model) renderSessionsPanel() string {
 			}
 		}
 
-		visibleStart, visibleEnd := m.visibleRange(cursorFlat, len(flatItems), h-2)
+		// Date headings and sessions both occupy two rendered terminal rows.
+		visibleStart, visibleEnd := m.visibleRange(cursorFlat, len(flatItems), max(1, (h-3)/2))
 		for i := visibleStart; i < visibleEnd; i++ {
 			item := flatItems[i]
 			if item.isGroupHeader {
@@ -144,17 +145,17 @@ func (m Model) renderSessionsPanel() string {
 				if !focused {
 					s1 = dimSelectedItemStyle
 				}
-				line1 := s1.Width(w - 4).Render(date + "  " + stats)
+				line1 := s1.Width(w - 4).MaxWidth(w - 4).Render(truncateStr(date+"  "+stats, w-6))
 				// Preview elevated to normal brightness as pseudo-title
-				line2 := s1.Width(w - 4).Render(preview)
+				line2 := s1.Width(w - 4).MaxWidth(w - 4).Render(preview)
 				items = append(items, line1, line2)
 			} else {
 				s1, s2 := itemStyle, itemDescStyle
 				if !focused {
 					s1, s2 = dimItemStyle, dimItemDescStyle
 				}
-				line1 := s1.Width(w - 4).Render(date + "  " + stats)
-				line2 := s2.Width(w - 4).Render(preview)
+				line1 := s1.Width(w - 4).MaxWidth(w - 4).Render(truncateStr(date+"  "+stats, w-6))
+				line2 := s2.Width(w - 4).MaxWidth(w - 4).Render(preview)
 				items = append(items, line1, line2)
 			}
 		}
@@ -162,7 +163,7 @@ func (m Model) renderSessionsPanel() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, items...)
 
-	return m.panelStyleFor(panelSessions).Width(w).Height(h).Render(content)
+	return m.panelStyleFor(panelSessions).Width(w - 2).Height(h - 2).Render(content)
 }
 
 func (m Model) renderConversationPanel() string {
@@ -220,7 +221,7 @@ func (m Model) renderConversationPanel() string {
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, bodyWithScroll)
 
-	return m.panelStyleFor(panelConversation).Width(w).Height(h).Render(content)
+	return m.panelStyleFor(panelConversation).Width(w - 2).Height(h - 2).Render(content)
 }
 
 // --- Layout math ---
@@ -277,7 +278,7 @@ func (m Model) conversationWidth() int {
 }
 
 func (m Model) contentHeight() int {
-	h := m.height - 3 // header + help bar + padding
+	h := m.height - 2 // header + help bar
 	if h < 5 {
 		return 5
 	}
@@ -337,8 +338,7 @@ func (m Model) panelStyleFor(panel int) lipgloss.Style {
 func (m Model) renderScrollbar(height int) string {
 	if height <= 0 || m.viewport.TotalLineCount() <= m.viewport.Height {
 		// No scrollbar needed — content fits
-		track := strings.Repeat(" \n", height)
-		return track
+		return strings.TrimSuffix(strings.Repeat(" \n", height), "\n")
 	}
 
 	// Calculate thumb position

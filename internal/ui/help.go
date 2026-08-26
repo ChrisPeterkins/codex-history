@@ -108,7 +108,9 @@ func (m Model) renderHelp() string {
 
 	// Show fewer keybindings on narrow terminals
 	pairs := allPairs
-	if m.width < breakpointMedium {
+	if m.width < breakpointNarrow {
+		pairs = []struct{ key, desc string }{{"?", "help"}, {"q", "quit"}}
+	} else if m.width < breakpointMedium {
 		pairs = []struct{ key, desc string }{
 			{"f", "full"}, {"/", "search"}, {"?", "help"}, {"q", "quit"},
 		}

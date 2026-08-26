@@ -4,7 +4,7 @@ const (
 	// Responsive layout breakpoints (terminal column width)
 	breakpointNarrow = 60
 	breakpointMedium = 100
-	breakpointWide   = 140
+	breakpointWide   = 160
 
 	// Content truncation limits (characters)
 	maxThinkingLen       = 2000

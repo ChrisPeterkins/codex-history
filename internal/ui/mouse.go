@@ -59,7 +59,7 @@ func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
 		if contentY < 0 {
 			return m, nil
 		}
-		visibleStart, _ := m.visibleRange(m.projectCursor, len(m.projects), m.contentHeight()-2)
+		visibleStart, _ := m.visibleRange(m.projectCursor, len(m.projects), m.contentHeight()-3)
 		idx := visibleStart + contentY
 		if idx >= 0 && idx < len(m.projects) && idx != m.projectCursor {
 			m.projectCursor = idx
@@ -71,10 +71,18 @@ func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
 		if contentY < 0 {
 			return m, nil
 		}
-		visibleStart, _ := m.visibleRange(m.sessionCursor, len(m.sessions), m.contentHeight()-2)
+		items := m.sessionListItems()
+		cursorFlat := 0
+		for i, item := range items {
+			if !item.isGroupHeader && item.origIdx == m.sessionCursor {
+				cursorFlat = i
+				break
+			}
+		}
+		visibleStart, _ := m.visibleRange(cursorFlat, len(items), max(1, (m.contentHeight()-3)/2))
 		idx := visibleStart + contentY/2
-		if idx >= 0 && idx < len(m.sessions) && idx != m.sessionCursor {
-			m.sessionCursor = idx
+		if idx >= 0 && idx < len(items) && !items[idx].isGroupHeader && items[idx].origIdx != m.sessionCursor {
+			m.sessionCursor = items[idx].origIdx
 			return m, m.loadMessagesWithSpinner()
 		}
 
