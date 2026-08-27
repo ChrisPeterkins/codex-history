@@ -40,9 +40,8 @@ type Model struct {
 
 	renderer *glamour.TermRenderer
 
-	// Collapsible sections: key -> collapsed (true = collapsed)
-	collapsed        map[string]bool
-	collapsibleLines map[string]int // key → line number (populated during render)
+	collapsed           map[string]bool
+	collapsibleSections []sectionLine
 
 	showHelp bool
 
@@ -150,7 +149,6 @@ func NewModel(version string) Model {
 	}
 }
 
-// rebuildRenderer creates a new glamour renderer sized to the current conversation width.
 func (m *Model) rebuildRenderer() {
 	wrapWidth := m.conversationWidth() - 12
 	if wrapWidth < 40 {
@@ -168,12 +166,29 @@ func (m *Model) rebuildRenderer() {
 	)
 }
 
-// updateConversationContent re-renders the conversation and updates the viewport and line tracking.
+func (m Model) conversationViewportSize() (int, int) {
+	return max(1, m.conversationWidth()-6), max(1, m.contentHeight()-3)
+}
+
+func (m *Model) syncConversationViewport() {
+	m.viewport.Width, m.viewport.Height = m.conversationViewportSize()
+}
+
+func (m *Model) refreshConversationLayout() {
+	offset := m.viewport.YOffset
+	m.rebuildRenderer()
+	m.syncConversationViewport()
+	if len(m.messages) > 0 {
+		m.updateConversationContent()
+	}
+	m.viewport.SetYOffset(offset)
+}
+
 func (m *Model) updateConversationContent() {
 	result := m.renderConversation()
 	m.viewport.SetContent(result.content)
 	m.userMessageLines = result.userLines
-	m.collapsibleLines = result.collapsibleLines
+	m.collapsibleSections = result.sections
 }
 
 func (m Model) Init() tea.Cmd {
@@ -195,15 +210,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.WindowSizeMsg:
+		offset, initialized := m.viewport.YOffset, m.ready
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
 		m.rebuildRenderer()
-		m.viewport = viewport.New(m.conversationWidth(), m.contentHeight())
-		m.viewport.Style = lipgloss.NewStyle()
+		if !initialized {
+			m.viewport = viewport.New(1, 1)
+			m.viewport.Style = lipgloss.NewStyle()
+		}
+		m.syncConversationViewport()
 		if len(m.messages) > 0 {
 			m.updateConversationContent()
 		}
+		m.viewport.SetYOffset(offset)
 		return m, nil
 
 	case projectsLoaded:

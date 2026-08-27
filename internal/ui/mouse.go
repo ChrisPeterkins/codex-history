@@ -51,7 +51,11 @@ func (m Model) panelAtX(x int) int {
 }
 
 func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
+	oldFocus := m.focus
 	m.focus = panel
+	if m.focus != oldFocus {
+		m.rebuildRendererIfNeeded()
+	}
 	contentY := y - panelItemOffset
 
 	switch panel {
@@ -90,9 +94,9 @@ func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
 		clickedRelLine := contentY
 		if clickedRelLine >= 0 {
 			clickedAbsLine := m.viewport.YOffset + clickedRelLine
-			for key, line := range m.collapsibleLines {
-				if line == clickedAbsLine {
-					m.collapsed[key] = !m.isCollapsed(key)
+			for _, section := range m.collapsibleSections {
+				if section.line == clickedAbsLine {
+					m.collapsed[section.key] = !m.isCollapsed(section.key)
 					offset := m.viewport.YOffset
 					m.updateConversationContent()
 					m.viewport.SetYOffset(offset)

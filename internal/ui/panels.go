@@ -184,9 +184,6 @@ func (m Model) renderConversationPanel() string {
 
 	header := lipgloss.JoinHorizontal(lipgloss.Center, title, scrollInfo)
 
-	m.viewport.Width = w - 6 // leave room for scroll indicator
-	m.viewport.Height = h - 3
-
 	var body string
 	if m.loading {
 		body = "\n\n" + emptyStyle.Width(w-6).Render(m.spinner.View()+" Loading session...")
@@ -400,15 +397,11 @@ func (m Model) applyLineHighlight(viewOutput string, maxWidth int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	key := m.nearestCollapsibleKey()
-	if key == "" {
-		return viewOutput
-	}
-	absLine, ok := m.collapsibleLines[key]
+	section, ok := m.activeCollapsibleSection()
 	if !ok {
 		return viewOutput
 	}
-	relativeLine := absLine - m.viewport.YOffset
+	relativeLine := section.line - m.viewport.YOffset
 	if relativeLine < 0 {
 		return viewOutput
 	}

@@ -40,6 +40,9 @@ func TestLayoutStatesAndConversationScrolling(t *testing.T) {
 		for _, size := range sizes {
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 			m = updated.(Model)
+			if w, h := m.conversationViewportSize(); m.viewport.Width != w || m.viewport.Height != h {
+				t.Errorf("%dx%d viewport is %dx%d, want %dx%d", size[0], size[1], m.viewport.Width, m.viewport.Height, w, h)
+			}
 			if got := m.View(); lipgloss.Width(got) != size[0] || lipgloss.Height(got) != size[1] {
 				t.Errorf("%dx%d state %d rendered as %dx%d", size[0], size[1], state, lipgloss.Width(got), lipgloss.Height(got))
 			}
@@ -59,5 +62,26 @@ func TestLayoutStatesAndConversationScrolling(t *testing.T) {
 		if m.renderProjectsPanel() != projects || m.renderSessionsPanel() != sessions {
 			t.Fatal("left panels changed while scrolling the conversation")
 		}
+	}
+}
+
+func TestCollapsibleSectionsAreStructuralAndDeterministic(t *testing.T) {
+	m := NewModel("test")
+	one := data.ContentBlock{Type: "tool_use", ToolID: "one", ToolName: "Bash", Input: map[string]interface{}{"command": "first"}}
+	two := data.ContentBlock{Type: "tool_use", ToolID: "two", ToolName: "Bash", Input: map[string]interface{}{"command": "second"}}
+	m.messages = []data.Message{{Type: "assistant", ContentBlocks: []data.ContentBlock{one, two}, ToolPairs: []data.ToolInteraction{{Use: one, Result: data.ContentBlock{Content: "▸ output is not a section"}}}}}
+	m.collapsed["tool:one"] = false
+	result := m.renderConversation()
+	if len(result.sections) != 2 || result.sections[0].key != "tool:one" || result.sections[1].key != "tool:two" || !strings.Contains(strings.Split(result.content, "\n")[result.sections[1].line], "second") {
+		t.Fatalf("incorrect structural sections: %#v", result.sections)
+	}
+	m.viewport.Height, m.viewport.YOffset = 5, 0
+	m.collapsibleSections = []sectionLine{{key: "upper", line: 1}, {key: "lower", line: 3}, {key: "offscreen", line: 5}}
+	if section, ok := m.activeCollapsibleSection(); !ok || section.key != "upper" {
+		t.Fatalf("tie selected %#v, %v", section, ok)
+	}
+	m.collapsibleSections = []sectionLine{{key: "offscreen", line: 5}}
+	if _, ok := m.activeCollapsibleSection(); ok {
+		t.Fatal("bottom boundary was treated as visible")
 	}
 }

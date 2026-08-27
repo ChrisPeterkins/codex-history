@@ -12,9 +12,19 @@ import (
 )
 
 type renderResult struct {
-	content          string
-	userLines        []int
-	collapsibleLines map[string]int
+	content   string
+	userLines []int
+	sections  []sectionLine
+}
+
+type sectionLine struct {
+	key  string
+	line int
+}
+
+type renderedMessage struct {
+	content  string
+	sections []sectionLine
 }
 
 func (m Model) renderConversation() renderResult {
@@ -43,26 +53,32 @@ func (m Model) renderConversation() renderResult {
 	}
 	var parts []string
 	var userLines []int
+	var sectionLines []sectionLine
 	lineCount := 0
+	appendPart := func(content string) int {
+		start := lineCount
+		if content != "" {
+			parts = append(parts, content)
+			lineCount += strings.Count(content, "\n") + 1
+		}
+		return start
+	}
 
 	// Compute and render stats header
 	statsHeader := m.renderConversationStats(w)
-	if statsHeader != "" {
-		parts = append(parts, statsHeader)
-		lineCount += strings.Count(statsHeader, "\n") + 2
-	}
+	appendPart(statsHeader)
 
 	hasRendered := false
 	var lastTimestamp time.Time
 	for _, msg := range m.messages {
 		var rendered string
+		var relativeSections []sectionLine
 
 		// Insert time gap indicator if significant time passed
 		if hasRendered && !msg.Timestamp.IsZero() && !lastTimestamp.IsZero() {
 			gap := msg.Timestamp.Sub(lastTimestamp)
 			if gapStr := formatTimeGap(gap, w); gapStr != "" {
-				parts = append(parts, gapStr)
-				lineCount += 2
+				appendPart(gapStr)
 			}
 		}
 
@@ -70,15 +86,14 @@ func (m Model) renderConversation() renderResult {
 		case "user":
 			if msg.RawText != "" {
 				if hasRendered {
-					divider := turnDividerStyle.Render(strings.Repeat("─", w))
-					parts = append(parts, divider)
-					lineCount += 2
+					appendPart(turnDividerStyle.Render(strings.Repeat("─", w)))
 				}
 				userLines = append(userLines, lineCount)
 				rendered = m.renderUserMessage(msg, w)
 			}
 		case "assistant":
-			rendered = m.renderAssistantMessage(msg, w)
+			result := m.renderAssistantMessage(msg, w)
+			rendered, relativeSections = result.content, result.sections
 		case "system":
 			if msg.Subtype == "turn_duration" && msg.DurationMs > 0 {
 				rendered = m.renderSystemMessage(msg, w)
@@ -86,8 +101,11 @@ func (m Model) renderConversation() renderResult {
 		}
 
 		if rendered != "" {
-			parts = append(parts, rendered)
-			lineCount += strings.Count(rendered, "\n") + 2
+			start := appendPart(rendered)
+			for _, section := range relativeSections {
+				section.line += start
+				sectionLines = append(sectionLines, section)
+			}
 			hasRendered = true
 			if !msg.Timestamp.IsZero() {
 				lastTimestamp = msg.Timestamp
@@ -95,55 +113,11 @@ func (m Model) renderConversation() renderResult {
 		}
 	}
 
-	content := strings.Join(parts, "\n")
-
-	// Scan the final output to find exact line positions of collapsible sections.
-	// This is the only reliable way since glamour output has unpredictable height.
-	collapsibleLines := scanCollapsibleLines(content, m.messages)
-
 	return renderResult{
-		content:          content,
-		userLines:        userLines,
-		collapsibleLines: collapsibleLines,
+		content:   strings.Join(parts, "\n"),
+		userLines: userLines,
+		sections:  sectionLines,
 	}
-}
-
-// scanCollapsibleLines finds the line numbers of collapsible section headers
-// in the final rendered content by matching the arrow markers (▸/▾).
-// Returns a map of sequential index → line number for use by the highlight.
-func scanCollapsibleLines(content string, messages []data.Message) map[string]int {
-	result := make(map[string]int)
-	lines := strings.Split(content, "\n")
-
-	// Build ordered list of collapsible keys from messages
-	var keys []string
-	for _, msg := range messages {
-		if msg.Type != "assistant" {
-			continue
-		}
-		for _, block := range msg.ContentBlocks {
-			switch block.Type {
-			case "thinking":
-				keys = append(keys, "thinking:"+msg.UUID)
-			case "tool_use":
-				keys = append(keys, "tool:"+block.ToolID)
-			}
-		}
-	}
-
-	// Find lines containing ▸ or ▾ (collapsible headers) and match to keys in order
-	keyIdx := 0
-	for lineNum, line := range lines {
-		if keyIdx >= len(keys) {
-			break
-		}
-		if strings.Contains(line, "▸") || strings.Contains(line, "▾") {
-			result[keys[keyIdx]] = lineNum
-			keyIdx++
-		}
-	}
-
-	return result
 }
 
 func (m Model) renderUserMessage(msg data.Message, w int) string {
@@ -166,13 +140,24 @@ func (m Model) renderUserMessage(msg data.Message, w int) string {
 	return label + "\n" + body
 }
 
-func (m Model) renderAssistantMessage(msg data.Message, w int) string {
+func (m Model) renderAssistantMessage(msg data.Message, w int) renderedMessage {
 	ts := timestampStyle.Render(msg.Timestamp.Format("15:04:05"))
 	avatar := avatarAssistantStyle.Render("◆")
 	label := " " + avatar + " " + assistantLabelStyle.Render("Codex") + " " + ts
 
-	var sections []string
-	sections = append(sections, label)
+	sections := []string{label}
+	lines := 1
+	var sectionLines []sectionLine
+	appendSection := func(content, key string) {
+		if content == "" {
+			return
+		}
+		if key != "" {
+			sectionLines = append(sectionLines, sectionLine{key: key, line: lines})
+		}
+		sections = append(sections, content)
+		lines += strings.Count(content, "\n") + 1
+	}
 
 	for _, block := range msg.ContentBlocks {
 		switch block.Type {
@@ -184,21 +169,21 @@ func (m Model) renderAssistantMessage(msg data.Message, w int) string {
 			if err != nil || strings.TrimSpace(mdRendered) == "" {
 				mdRendered = block.Text
 			}
-			sections = append(sections, assistantBubbleStyle.Width(w).Render(mdRendered))
+			appendSection(assistantBubbleStyle.Width(w).Render(mdRendered), "")
 
 		case "thinking":
-			sections = append(sections, m.renderThinkingBlock(block, msg.UUID, w))
+			appendSection(m.renderThinkingBlock(block, msg.UUID, w), "thinking:"+msg.UUID)
 
 		case "tool_use":
-			sections = append(sections, m.renderToolCall(block, msg, w))
+			appendSection(m.renderToolCall(block, msg, w), "tool:"+block.ToolID)
 		}
 	}
 
 	if msg.Usage.OutputTokens > 0 {
-		sections = append(sections, m.renderTokenInfo(msg))
+		appendSection(m.renderTokenInfo(msg), "")
 	}
 
-	return strings.Join(sections, "\n")
+	return renderedMessage{content: strings.Join(sections, "\n"), sections: sectionLines}
 }
 
 func (m Model) renderThinkingBlock(block data.ContentBlock, msgUUID string, w int) string {

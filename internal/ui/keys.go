@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"math"
 	"strings"
 	"time"
 
@@ -112,12 +111,7 @@ func (m Model) handleActionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if m.fullScreen {
 			m.focus = panelConversation
 		}
-		m.rebuildRenderer()
-		m.viewport.Width = m.conversationWidth() - 4
-		m.viewport.Height = m.contentHeight() - 3
-		if len(m.messages) > 0 {
-			m.updateConversationContent()
-		}
+		m.refreshConversationLayout()
 		return m, nil, true
 
 	case "y":
@@ -299,6 +293,7 @@ func (m Model) handlePanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		if m.fullScreen {
 			return m, nil, true
 		}
+		oldFocus := m.focus
 		switch m.visiblePanelCount() {
 		case 1:
 			// Single panel: tab does nothing
@@ -317,12 +312,16 @@ func (m Model) handlePanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		default:
 			m.focus = (m.focus + 1) % 3
 		}
+		if m.focus != oldFocus {
+			m.rebuildRendererIfNeeded()
+		}
 		return m, nil, true
 
 	case "shift+tab":
 		if m.fullScreen {
 			return m, nil, true
 		}
+		oldFocus := m.focus
 		switch m.visiblePanelCount() {
 		case 1:
 			// Single panel: shift+tab does nothing
@@ -341,6 +340,9 @@ func (m Model) handlePanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		default:
 			m.focus = (m.focus + 2) % 3
 		}
+		if m.focus != oldFocus {
+			m.rebuildRendererIfNeeded()
+		}
 		return m, nil, true
 
 	case "enter":
@@ -353,12 +355,7 @@ func (m Model) handlePanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "esc":
 		if m.fullScreen {
 			m.fullScreen = false
-			m.rebuildRenderer()
-			m.viewport.Width = m.conversationWidth() - 4
-			m.viewport.Height = m.contentHeight() - 3
-			if len(m.messages) > 0 {
-				m.updateConversationContent()
-			}
+			m.refreshConversationLayout()
 			return m, nil, true
 		}
 		if m.focus > panelProjects {
@@ -398,50 +395,33 @@ func (m *Model) jumpToNextUserMessage(dir int) {
 	}
 }
 
-// toggleCollapsibleAtCursor toggles the collapsible section nearest to the viewport position.
 func (m *Model) toggleCollapsibleAtCursor() {
-	key := m.nearestCollapsibleKey()
-	if key != "" {
-		m.collapsed[key] = !m.isCollapsed(key)
+	if section, ok := m.activeCollapsibleSection(); ok {
+		m.collapsed[section.key] = !m.isCollapsed(section.key)
 	}
 }
 
-// highlightTargetLine returns the absolute content line number that the
-// highlight cursor sits on. This must match applyLineHighlight's center calc.
-func (m *Model) highlightTargetLine() int {
-	visibleLines := m.viewport.Height
-	return m.viewport.YOffset + visibleLines/2
-}
-
-// nearestCollapsibleKey returns the key of the collapsible section closest to the
-// highlight cursor line. Only considers sections currently visible in the viewport.
-func (m *Model) nearestCollapsibleKey() string {
-	if len(m.collapsibleLines) == 0 {
-		return ""
-	}
-
-	target := m.highlightTargetLine()
-	viewTop := m.viewport.YOffset
-	viewBottom := viewTop + m.viewport.Height
-
-	bestKey := ""
-	bestDist := math.MaxInt
-
-	for key, line := range m.collapsibleLines {
-		if line < viewTop || line > viewBottom {
+func (m Model) activeCollapsibleSection() (sectionLine, bool) {
+	top, bottom := m.viewport.YOffset, m.viewport.YOffset+m.viewport.Height
+	target, bestDist := top+m.viewport.Height/2, 0
+	var best sectionLine
+	found := false
+	for _, section := range m.collapsibleSections {
+		if section.line < top {
 			continue
 		}
-		dist := target - line
+		if section.line >= bottom {
+			break
+		}
+		dist := target - section.line
 		if dist < 0 {
 			dist = -dist
 		}
-		if dist < bestDist {
-			bestDist = dist
-			bestKey = key
+		if !found || dist < bestDist {
+			best, bestDist, found = section, dist, true
 		}
 	}
-
-	return bestKey
+	return best, found
 }
 
 // expandAll expands all collapsible sections in the current conversation.
@@ -484,16 +464,9 @@ func (m Model) isShowingProjectsSessions() bool {
 	return m.focus == panelProjects
 }
 
-// rebuildRendererIfNeeded rebuilds the glamour renderer when the conversation
-// panel width has changed (e.g. because focus shifted which panels are visible).
 func (m *Model) rebuildRendererIfNeeded() {
 	if m.visiblePanelCount() < 3 {
-		m.rebuildRenderer()
-		m.viewport.Width = m.conversationWidth() - 4
-		m.viewport.Height = m.contentHeight() - 3
-		if len(m.messages) > 0 {
-			m.updateConversationContent()
-		}
+		m.refreshConversationLayout()
 	}
 }
 
