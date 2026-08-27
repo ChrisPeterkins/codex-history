@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -11,11 +12,20 @@ import (
 
 type searchResultsMsg struct {
 	results []SearchResult
+	seq     uint64
+	err     error
+}
+
+type searchDelayMsg struct {
+	query string
+	seq   uint64
 }
 
 func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
+		m.searchSeq++
+		m.searching = false
 		m.searchMode = false
 		m.searchInput.Blur()
 		m.searchInput.SetValue("")
@@ -25,14 +35,16 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if len(m.searchResults) > 0 && m.searchCursor < len(m.searchResults) {
 			result := m.searchResults[m.searchCursor]
+			m.saveScroll()
 			m.projectCursor = result.ProjectIdx
-			m.sessionCursor = result.SessionIdx
+			m.sessionCursor = 0
 			m.searchMode = false
 			m.searchInput.Blur()
 			m.searchInput.SetValue("")
 			m.searchResults = nil
 			m.focus = panelConversation
-			return m, tea.Batch(m.loadSessionsForSearch(), m.loadMessagesForSearch(result))
+			m.loading = true
+			return m, tea.Batch(m.loadSessionsCmd(result.SessionID, false), m.spinner.Tick)
 		}
 		return m, nil
 
@@ -53,79 +65,47 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.searchInput, cmd = m.searchInput.Update(msg)
 
 	query := m.searchInput.Value()
+	m.searchSeq++
 	if query != "" && len(query) >= minSearchQueryLen {
-		return m, tea.Batch(cmd, m.searchCmd(query))
+		m.searchResults, m.searchCursor, m.searching = nil, 0, true
+		seq := m.searchSeq
+		return m, tea.Batch(cmd, tea.Tick(300*time.Millisecond, func(time.Time) tea.Msg {
+			return searchDelayMsg{query: query, seq: seq}
+		}))
 	}
 
-	if query == "" {
-		m.searchResults = nil
-	}
+	m.searchResults, m.searching = nil, false
 
 	return m, cmd
 }
 
-func (m Model) searchCmd(query string) tea.Cmd {
+func (m Model) searchCmd(query string, seq uint64) tea.Cmd {
 	projects := m.projects
 	return func() tea.Msg {
 		query = strings.ToLower(query)
+		contentMatches, err := data.SearchSessionIDs(query, maxSearchResults*4)
 		var results []SearchResult
 
 		for pi, project := range projects {
-			sessions, err := data.LoadSessions(&projects[pi])
-			if err != nil {
-				continue
-			}
-			for si, session := range sessions {
+			for si, session := range project.Sessions {
 				searchText := strings.ToLower(session.Preview + " " + project.Name)
-				if fuzzyMatch(searchText, query) {
+				if fuzzyMatch(searchText, query) || contentMatches[session.ID] {
 					results = append(results, SearchResult{
 						ProjectIdx: pi,
 						SessionIdx: si,
+						SessionID:  session.ID,
 						Preview:    session.Preview,
 						Project:    project.Name,
 						Date:       session.StartedAt.Format("Jan 02 15:04"),
 					})
 				}
 				if len(results) >= maxSearchResults {
-					return searchResultsMsg{results: results}
+					return searchResultsMsg{results: results, seq: seq, err: err}
 				}
 			}
 		}
 
-		return searchResultsMsg{results: results}
-	}
-}
-
-func (m Model) loadSessionsForSearch() tea.Cmd {
-	if m.projectCursor >= len(m.projects) {
-		return nil
-	}
-	p := &m.projects[m.projectCursor]
-	return func() tea.Msg {
-		sessions, err := data.LoadSessions(p)
-		if err != nil {
-			return sessionsLoaded{}
-		}
-		return sessionsLoaded{sessions: sessions}
-	}
-}
-
-func (m Model) loadMessagesForSearch(result SearchResult) tea.Cmd {
-	if result.ProjectIdx >= len(m.projects) {
-		return nil
-	}
-	p := &m.projects[result.ProjectIdx]
-	return func() tea.Msg {
-		sessions, err := data.LoadSessions(p)
-		if err != nil || result.SessionIdx >= len(sessions) {
-			return messagesLoaded{}
-		}
-		s := &sessions[result.SessionIdx]
-		messages, err := data.LoadMessages(s)
-		if err != nil {
-			return messagesLoaded{}
-		}
-		return messagesLoaded{messages: messages}
+		return searchResultsMsg{results: results, seq: seq, err: err}
 	}
 }
 
@@ -159,7 +139,9 @@ func (m Model) renderSearchView() string {
 		}
 	}
 
-	if len(m.searchResults) == 0 && m.searchInput.Value() != "" && len(m.searchInput.Value()) >= 2 {
+	if m.searching {
+		resultLines = append(resultLines, emptyStyle.Width(w).Render("\n  Searching…"))
+	} else if len(m.searchResults) == 0 && m.searchInput.Value() != "" && len(m.searchInput.Value()) >= 2 {
 		resultLines = append(resultLines, emptyStyle.Width(w).Render("\n  No results found"))
 	}
 

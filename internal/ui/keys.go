@@ -114,6 +114,21 @@ func (m Model) handleActionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.refreshConversationLayout()
 		return m, nil, true
 
+	case "r":
+		m.loading = true
+		return m, tea.Batch(m.refreshCmd(), m.spinner.Tick), true
+
+	case "l":
+		m.follow = !m.follow
+		if m.follow {
+			m.statusMessage = "Live follow: on"
+			m.followRevision = ""
+			return m, tea.Batch(m.followCheckCmd(), followTick()), true
+		}
+		m.loadSeq++
+		m.statusMessage = "Live follow: off"
+		return m, clearStatusAfter(2 * time.Second), true
+
 	case "y":
 		if len(m.messages) > 0 {
 			return m, m.copyConversationCmd(), true
@@ -134,12 +149,19 @@ func (m Model) handleActionKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 
 	case " ":
 		if m.focus == panelConversation {
-			offset := m.viewport.YOffset
-			m.toggleCollapsibleAtCursor()
-			m.updateConversationContent()
-			m.viewport.SetYOffset(offset)
+			m.toggleSelectedSection()
 			return m, nil, true
 		}
+
+	case "[", "]":
+		if m.focus == panelConversation {
+			dir := 1
+			if msg.String() == "[" {
+				dir = -1
+			}
+			m.jumpToCollapsible(dir)
+		}
+		return m, nil, true
 
 	case "F":
 		m.sessionFilter = (m.sessionFilter + 1) % len(sessionFilterTypes)
@@ -180,14 +202,11 @@ func (m Model) handleNavKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		switch m.focus {
 		case panelProjects:
 			if m.projectCursor > 0 {
-				m.projectCursor--
-				m.sessionCursor = 0
-				return m, m.loadSessionsCmd(), true
+				return m, m.selectProject(m.projectCursor - 1), true
 			}
 		case panelSessions:
 			if m.sessionCursor > 0 {
-				m.sessionCursor--
-				return m, m.loadMessagesWithSpinner(), true
+				return m, m.selectSession(m.sessionCursor - 1), true
 			}
 		case panelConversation:
 			var cmd tea.Cmd
@@ -199,14 +218,11 @@ func (m Model) handleNavKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		switch m.focus {
 		case panelProjects:
 			if m.projectCursor < len(m.projects)-1 {
-				m.projectCursor++
-				m.sessionCursor = 0
-				return m, m.loadSessionsCmd(), true
+				return m, m.selectProject(m.projectCursor + 1), true
 			}
 		case panelSessions:
 			if m.sessionCursor < len(m.sessions)-1 {
-				m.sessionCursor++
-				return m, m.loadMessagesWithSpinner(), true
+				return m, m.selectSession(m.sessionCursor + 1), true
 			}
 		case panelConversation:
 			var cmd tea.Cmd
@@ -218,14 +234,11 @@ func (m Model) handleNavKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		switch m.focus {
 		case panelProjects:
 			if m.projectCursor != 0 {
-				m.projectCursor = 0
-				m.sessionCursor = 0
-				return m, m.loadSessionsCmd(), true
+				return m, m.selectProject(0), true
 			}
 		case panelSessions:
 			if m.sessionCursor != 0 {
-				m.sessionCursor = 0
-				return m, m.loadMessagesWithSpinner(), true
+				return m, m.selectSession(0), true
 			}
 		case panelConversation:
 			m.viewport.GotoTop()
@@ -237,15 +250,12 @@ func (m Model) handleNavKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case panelProjects:
 			last := len(m.projects) - 1
 			if last >= 0 && m.projectCursor != last {
-				m.projectCursor = last
-				m.sessionCursor = 0
-				return m, m.loadSessionsCmd(), true
+				return m, m.selectProject(last), true
 			}
 		case panelSessions:
 			last := len(m.sessions) - 1
 			if last >= 0 && m.sessionCursor != last {
-				m.sessionCursor = last
-				return m, m.loadMessagesWithSpinner(), true
+				return m, m.selectSession(last), true
 			}
 		case panelConversation:
 			m.viewport.GotoBottom()
@@ -255,12 +265,9 @@ func (m Model) handleNavKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "pgup":
 		switch m.focus {
 		case panelProjects:
-			m.projectCursor = clamp(m.projectCursor-m.contentHeight()/2, 0, max(0, len(m.projects)-1))
-			m.sessionCursor = 0
-			return m, m.loadSessionsCmd(), true
+			return m, m.selectProject(clamp(m.projectCursor-m.contentHeight()/2, 0, max(0, len(m.projects)-1))), true
 		case panelSessions:
-			m.sessionCursor = clamp(m.sessionCursor-m.contentHeight()/2, 0, max(0, len(m.sessions)-1))
-			return m, m.loadMessagesWithSpinner(), true
+			return m, m.selectSession(clamp(m.sessionCursor-m.contentHeight()/2, 0, max(0, len(m.sessions)-1))), true
 		case panelConversation:
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -270,12 +277,9 @@ func (m Model) handleNavKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "pgdown":
 		switch m.focus {
 		case panelProjects:
-			m.projectCursor = clamp(m.projectCursor+m.contentHeight()/2, 0, max(0, len(m.projects)-1))
-			m.sessionCursor = 0
-			return m, m.loadSessionsCmd(), true
+			return m, m.selectProject(clamp(m.projectCursor+m.contentHeight()/2, 0, max(0, len(m.projects)-1))), true
 		case panelSessions:
-			m.sessionCursor = clamp(m.sessionCursor+m.contentHeight()/2, 0, max(0, len(m.sessions)-1))
-			return m, m.loadMessagesWithSpinner(), true
+			return m, m.selectSession(clamp(m.sessionCursor+m.contentHeight()/2, 0, max(0, len(m.sessions)-1))), true
 		case panelConversation:
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
@@ -346,7 +350,9 @@ func (m Model) handlePanelKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 
 	case "enter":
-		if m.focus < panelConversation {
+		if m.focus == panelConversation {
+			m.toggleSelectedSection()
+		} else {
 			m.focus++
 			m.rebuildRendererIfNeeded()
 		}
@@ -395,10 +401,33 @@ func (m *Model) jumpToNextUserMessage(dir int) {
 	}
 }
 
-func (m *Model) toggleCollapsibleAtCursor() {
+func (m *Model) toggleSelectedSection() {
 	if section, ok := m.activeCollapsibleSection(); ok {
+		offset := m.viewport.YOffset
 		m.collapsed[section.key] = !m.isCollapsed(section.key)
+		m.updateConversationContent()
+		m.viewport.SetYOffset(offset)
 	}
+}
+
+func (m *Model) jumpToCollapsible(dir int) {
+	if len(m.collapsibleSections) == 0 {
+		return
+	}
+	idx := len(m.collapsibleSections)
+	if dir > 0 {
+		idx = -1
+	}
+	if active, ok := m.activeCollapsibleSection(); ok {
+		for i, section := range m.collapsibleSections {
+			if section == active {
+				idx = i
+				break
+			}
+		}
+	}
+	idx = (idx + dir + len(m.collapsibleSections)) % len(m.collapsibleSections)
+	m.viewport.SetYOffset(max(0, m.collapsibleSections[idx].line-m.viewport.Height/2))
 }
 
 func (m Model) activeCollapsibleSection() (sectionLine, bool) {
@@ -468,13 +497,4 @@ func (m *Model) rebuildRendererIfNeeded() {
 	if m.visiblePanelCount() < 3 {
 		m.refreshConversationLayout()
 	}
-}
-
-// loadMessagesWithSpinner saves scroll position, sets loading state, and loads messages.
-func (m *Model) loadMessagesWithSpinner() tea.Cmd {
-	if m.sessionCursor < len(m.sessions) {
-		m.scrollPositions[m.sessions[m.sessionCursor].ID] = m.viewport.YOffset
-	}
-	m.loading = true
-	return tea.Batch(m.loadMessagesCmd(), m.spinner.Tick)
 }

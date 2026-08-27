@@ -45,8 +45,12 @@ type Model struct {
 
 	showHelp bool
 
-	spinner spinner.Model
-	loading bool
+	spinner        spinner.Model
+	loading        bool
+	loadError      string
+	follow         bool
+	followRevision string
+	loadSeq        uint64
 
 	// Scroll position memory (sessionID → YOffset)
 	scrollPositions map[string]int
@@ -57,6 +61,8 @@ type Model struct {
 	searchInput   textinput.Model
 	searchResults []SearchResult
 	searchCursor  int
+	searchSeq     uint64
+	searching     bool
 
 	// Vim marks
 	marks             map[rune]markPosition
@@ -85,6 +91,7 @@ type Model struct {
 type SearchResult struct {
 	ProjectIdx int
 	SessionIdx int
+	SessionID  string
 	Preview    string
 	Project    string
 	Date       string
@@ -191,6 +198,53 @@ func (m *Model) updateConversationContent() {
 	m.collapsibleSections = result.sections
 }
 
+func (m Model) currentProjectKey() string {
+	if m.projectCursor < len(m.projects) {
+		return m.projects[m.projectCursor].DirName
+	}
+	return ""
+}
+
+func (m Model) currentSessionID() string {
+	if m.sessionCursor < len(m.sessions) {
+		return m.sessions[m.sessionCursor].ID
+	}
+	return ""
+}
+
+func (m *Model) saveScroll() {
+	if id := m.currentSessionID(); id != "" {
+		m.scrollPositions[id] = m.viewport.YOffset
+	}
+}
+
+func (m *Model) selectProject(index int) tea.Cmd {
+	m.saveScroll()
+	m.followRevision = ""
+	m.projectCursor, m.sessionCursor, m.loading = index, 0, true
+	return m.loadSessionsCmd("", false)
+}
+
+func (m *Model) selectSession(index int) tea.Cmd {
+	m.saveScroll()
+	m.followRevision = ""
+	m.sessionCursor, m.loading = index, true
+	return tea.Batch(m.loadMessagesCmd(false, false), m.spinner.Tick)
+}
+
+func (m *Model) setLoadError(err error) {
+	m.loading = false
+	m.loadError = err.Error()
+	m.statusMessage = "Error: " + m.loadError
+}
+
+func (m *Model) clearLoadError() {
+	if strings.HasPrefix(m.statusMessage, "Error: ") {
+		m.statusMessage = ""
+	}
+	m.loadError = ""
+}
+
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(loadProjects, checkForUpdate(m.version))
 }
@@ -227,29 +281,75 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case projectsLoaded:
+		if msg.seq != m.loadSeq || msg.projectKey != "" && m.currentProjectKey() != msg.projectKey {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.setLoadError(msg.err)
+			return m, nil
+		}
 		m.projects = msg.projects
+		m.projectCursor = 0
+		for i := range m.projects {
+			if m.projects[i].DirName == msg.projectKey {
+				m.projectCursor = i
+				break
+			}
+		}
+		m.clearLoadError()
 		if len(m.projects) > 0 {
-			return m, m.loadSessionsCmd()
+			m.loading = true
+			return m, m.loadSessionsCmd(msg.sessionID, msg.preserve)
 		}
 		return m, nil
 
 	case sessionsLoaded:
+		if msg.seq != m.loadSeq || msg.projectKey != m.currentProjectKey() {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.setLoadError(msg.err)
+			return m, nil
+		}
 		m.sessions = msg.sessions
 		m.sessionCursor = 0
+		for i := range m.sessions {
+			if m.sessions[i].ID == msg.sessionID {
+				m.sessionCursor = i
+				break
+			}
+		}
+		m.clearLoadError()
 		if len(m.sessions) > 0 {
 			m.loading = true
-			return m, tea.Batch(m.loadMessagesCmd(), m.spinner.Tick)
+			return m, tea.Batch(m.loadMessagesCmd(msg.preserve, false), m.spinner.Tick)
 		}
 		m.messages = nil
+		m.loading = false
 		m.viewport.SetContent(emptyStyle.Render("No sessions found"))
 		return m, nil
 
 	case messagesLoaded:
+		if msg.seq != m.loadSeq || msg.sessionID != m.currentSessionID() {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.setLoadError(msg.err)
+			return m, nil
+		}
+		offset, atBottom := m.viewport.YOffset, m.viewport.AtBottom()
 		m.messages = msg.messages
 		m.loading = false
-		m.collapsed = make(map[string]bool)
+		m.clearLoadError()
+		if !msg.preserve {
+			m.collapsed = make(map[string]bool)
+		}
 		m.updateConversationContent()
-		if m.pendingMarkOffset != nil {
+		if msg.follow && atBottom {
+			m.viewport.GotoBottom()
+		} else if msg.preserve {
+			m.viewport.SetYOffset(offset)
+		} else if m.pendingMarkOffset != nil {
 			m.viewport.SetYOffset(*m.pendingMarkOffset)
 			m.pendingMarkOffset = nil
 		} else if m.sessionCursor < len(m.sessions) {
@@ -271,13 +371,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case followTickMsg:
+		if m.follow && m.currentSessionID() != "" {
+			return m, tea.Batch(m.followCheckCmd(), followTick())
+		}
+		return m, nil
+
+	case followCheckMsg:
+		if !m.follow || msg.sessionID != m.currentSessionID() {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.statusMessage = "Follow error: " + msg.err.Error()
+			return m, nil
+		}
+		if strings.HasPrefix(m.statusMessage, "Follow error: ") {
+			m.statusMessage = ""
+		}
+		if msg.revision != m.followRevision {
+			m.followRevision = msg.revision
+			return m, m.loadMessagesCmd(true, true)
+		}
+		return m, nil
+
 	case updateAvailableMsg:
 		m.updateAvail = msg.version
 		return m, nil
 
+	case searchDelayMsg:
+		if m.searchMode && msg.seq == m.searchSeq && msg.query == m.searchInput.Value() {
+			return m, m.searchCmd(msg.query, msg.seq)
+		}
+		return m, nil
+
 	case searchResultsMsg:
-		m.searchResults = msg.results
-		m.searchCursor = 0
+		if m.searchMode && msg.seq == m.searchSeq {
+			m.searchResults, m.searchCursor = msg.results, 0
+			m.searching = false
+			if msg.err != nil {
+				m.statusMessage = "Search content unavailable: " + msg.err.Error()
+			} else if strings.HasPrefix(m.statusMessage, "Search content unavailable: ") {
+				m.statusMessage = ""
+			}
+		}
 		return m, nil
 
 	case clipboardCopiedMsg:

@@ -2,11 +2,6 @@ package ui
 
 import tea "github.com/charmbracelet/bubbletea"
 
-// panelItemOffset is the number of terminal lines from the top of the screen
-// to the first item inside a panel: header bar(1) + panel border(1) + padding(1) + title(1) = 4.
-// Adjust if the layout structure changes.
-const panelItemOffset = 2
-
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	x := msg.X
 	y := msg.Y
@@ -56,7 +51,7 @@ func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
 	if m.focus != oldFocus {
 		m.rebuildRendererIfNeeded()
 	}
-	contentY := y - panelItemOffset
+	contentY := y - screenHeaderHeight - panelTopChrome
 
 	switch panel {
 	case panelProjects:
@@ -66,9 +61,7 @@ func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
 		visibleStart, _ := m.visibleRange(m.projectCursor, len(m.projects), m.contentHeight()-3)
 		idx := visibleStart + contentY
 		if idx >= 0 && idx < len(m.projects) && idx != m.projectCursor {
-			m.projectCursor = idx
-			m.sessionCursor = 0
-			return m, m.loadSessionsCmd()
+			return m, m.selectProject(idx)
 		}
 
 	case panelSessions:
@@ -76,18 +69,20 @@ func (m Model) handleMouseClick(panel, x, y int) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		items := m.sessionListItems()
-		cursorFlat := 0
-		for i, item := range items {
-			if !item.isGroupHeader && item.origIdx == m.sessionCursor {
-				cursorFlat = i
+		start, end := m.visibleSessionRange(items)
+		row := 0
+		for _, item := range items[start:end] {
+			height := 2
+			if item.isGroupHeader {
+				height = 1
+			}
+			if contentY < row+height {
+				if contentY >= row && !item.isGroupHeader && item.origIdx != m.sessionCursor {
+					return m, m.selectSession(item.origIdx)
+				}
 				break
 			}
-		}
-		visibleStart, _ := m.visibleRange(cursorFlat, len(items), max(1, (m.contentHeight()-3)/2))
-		idx := visibleStart + contentY/2
-		if idx >= 0 && idx < len(items) && !items[idx].isGroupHeader && items[idx].origIdx != m.sessionCursor {
-			m.sessionCursor = items[idx].origIdx
-			return m, m.loadMessagesWithSpinner()
+			row += height
 		}
 
 	case panelConversation:
@@ -114,15 +109,12 @@ func (m Model) handleMouseScroll(panel, dir int) (tea.Model, tea.Cmd) {
 	case panelProjects:
 		newCursor := m.projectCursor + dir
 		if newCursor >= 0 && newCursor < len(m.projects) {
-			m.projectCursor = newCursor
-			m.sessionCursor = 0
-			return m, m.loadSessionsCmd()
+			return m, m.selectProject(newCursor)
 		}
 	case panelSessions:
 		newCursor := m.sessionCursor + dir
 		if newCursor >= 0 && newCursor < len(m.sessions) {
-			m.sessionCursor = newCursor
-			return m, m.loadMessagesWithSpinner()
+			return m, m.selectSession(newCursor)
 		}
 	case panelConversation:
 		if dir < 0 {

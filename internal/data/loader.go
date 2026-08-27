@@ -59,6 +59,7 @@ func LoadProjects() ([]Project, error) {
 	history := readHistoryIndex()
 
 	db, dbErr := openCodexDB("state_5.sqlite")
+	catalogErr := dbErr
 	if dbErr == nil {
 		defer db.Close()
 		rows, err := db.Query(`SELECT id, rollout_path, created_at, updated_at, cwd,
@@ -66,6 +67,7 @@ func LoadProjects() ([]Project, error) {
             WHERE source NOT LIKE '{"subagent"%'
             ORDER BY created_at DESC`)
 		if err == nil {
+			catalogErr = nil
 			defer rows.Close()
 			stats := loadTurnStats()
 			for rows.Next() {
@@ -88,6 +90,9 @@ func LoadProjects() ([]Project, error) {
 				addSession(projectMap, cwd, s)
 				seen[id] = true
 			}
+			catalogErr = rows.Err()
+		} else {
+			catalogErr = err
 		}
 	}
 
@@ -121,8 +126,8 @@ func LoadProjects() ([]Project, error) {
 	if p := historyOnlyProject(history, seen); p != nil {
 		projectMap["\x00history"] = p
 	}
-	if len(projectMap) == 0 && dbErr != nil {
-		return nil, fmt.Errorf("no Codex history found in %s", codexDir)
+	if len(projectMap) == 0 && catalogErr != nil {
+		return nil, fmt.Errorf("could not load Codex history from %s: %w", codexDir, catalogErr)
 	}
 
 	projects := make([]Project, 0, len(projectMap))
@@ -209,23 +214,82 @@ func LoadSessions(project *Project) ([]Session, error) {
 	return sessions, nil
 }
 
+// SearchSessionIDs searches full chat text plus the command/metadata prefix of tool items.
+func SearchSessionIDs(query string, limit int) (map[string]bool, error) {
+	db, err := openCodexDB("thread_history_1.sqlite")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	query = strings.ToLower(query)
+	rows, err := db.Query(`SELECT DISTINCT thread_id FROM thread_items WHERE
+        (item_type IN ('userMessage','agentMessage','reasoning') AND instr(lower(item_json), ?) > 0) OR
+        (item_type IN ('commandExecution','mcpToolCall','fileChange') AND instr(lower(substr(item_json,1,1024)), ?) > 0)
+        LIMIT ?`, query, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]bool)
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			result[id] = true
+		}
+	}
+	return result, rows.Err()
+}
+
+// ConversationRevision returns a cheap change token without loading message bodies.
+func ConversationRevision(session *Session) (string, error) {
+	var sourceErr error
+	if db, err := openCodexDB("thread_history_1.sqlite"); err == nil {
+		defer db.Close()
+		var count, ordinal int64
+		err = db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(updated_at_ordinal),0)
+            FROM thread_items WHERE thread_id = ?`, session.ID).Scan(&count, &ordinal)
+		if err == nil && count > 0 {
+			return fmt.Sprintf("db:%d:%d", count, ordinal), nil
+		}
+		sourceErr = err
+	} else {
+		sourceErr = err
+	}
+	if info, err := os.Stat(session.FilePath); err == nil {
+		return fmt.Sprintf("file:%d:%d", info.Size(), info.ModTime().UnixNano()), nil
+	}
+	if n := len(session.HistoryEntries); n > 0 {
+		return fmt.Sprintf("history:%d:%d", n, session.HistoryEntries[n-1].Timestamp), nil
+	}
+	if sourceErr == nil {
+		sourceErr = errors.New("conversation source is unavailable")
+	}
+	return "", sourceErr
+}
+
 // LoadMessages prefers Codex's complete projected history and falls back to a
 // raw rollout, then the lightweight prompt-only history.
 func LoadMessages(session *Session) ([]Message, error) {
+	var loadErrs []error
 	if messages, err := loadProjectedMessages(session.ID); err == nil && len(messages) > 0 {
 		PairToolInteractions(messages)
 		return messages, nil
+	} else if err != nil {
+		loadErrs = append(loadErrs, fmt.Errorf("projected history: %w", err))
 	}
 	if session.FilePath != "" {
 		if messages, err := loadRolloutMessages(session.FilePath); err == nil && len(messages) > 0 {
 			PairToolInteractions(messages)
 			return messages, nil
+		} else if err != nil {
+			loadErrs = append(loadErrs, fmt.Errorf("rollout: %w", err))
 		}
 	}
 	if len(session.HistoryEntries) > 0 {
 		return LoadHistoryMessages(session)
 	}
-	return nil, errors.New("conversation content is unavailable")
+	loadErrs = append(loadErrs, errors.New("conversation content is unavailable"))
+	return nil, errors.Join(loadErrs...)
 }
 
 func loadProjectedMessages(threadID string) ([]Message, error) {

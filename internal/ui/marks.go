@@ -67,11 +67,10 @@ func (m Model) handleMarkKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Different session — find and load it
 		for i, s := range m.sessions {
 			if s.ID == mark.sessionID {
-				m.sessionCursor = i
 				offset := mark.yOffset
 				m.pendingMarkOffset = &offset
 				m.focus = panelConversation
-				return m, m.loadMessagesWithSpinner()
+				return m, m.selectSession(i)
 			}
 		}
 

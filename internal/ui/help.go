@@ -17,6 +17,7 @@ func (m Model) renderHelpOverlay() string {
 			title: "Navigation",
 			keys: []struct{ key, desc string }{
 				{"↑/↓ or j/k", "Move cursor / scroll"},
+				{"[ / ]", "Previous / next tool call"},
 				{"g", "Jump to top"},
 				{"G", "Jump to bottom"},
 				{"PgUp/PgDn", "Page up / page down"},
@@ -28,7 +29,7 @@ func (m Model) renderHelpOverlay() string {
 			keys: []struct{ key, desc string }{
 				{"Tab", "Next panel"},
 				{"Shift+Tab", "Previous panel"},
-				{"Enter", "Drill into next panel"},
+				{"Enter", "Drill in / toggle tool"},
 				{"Esc", "Go back a panel"},
 				{"f", "Toggle full-screen"},
 				{"F", "Cycle session filter"},
@@ -37,7 +38,7 @@ func (m Model) renderHelpOverlay() string {
 		{
 			title: "Conversation",
 			keys: []struct{ key, desc string }{
-				{"Space", "Expand/collapse tool calls"},
+				{"Enter / Space", "Expand/collapse selected tool"},
 				{"a / A", "Expand all / collapse all"},
 				{"m + a-z", "Set a bookmark"},
 				{"' + a-z", "Jump to bookmark"},
@@ -54,6 +55,8 @@ func (m Model) renderHelpOverlay() string {
 		{
 			title: "Other",
 			keys: []struct{ key, desc string }{
+				{"r", "Refresh history"},
+				{"l", "Toggle live follow"},
 				{"t", "Cycle theme"},
 				{"?", "Toggle this help"},
 				{"q", "Quit"},
@@ -106,6 +109,7 @@ func (m Model) renderHelp() string {
 		{"↑/↓", "navigate"},
 		{"f", "full"}, {"/", "search"},
 		{"space", "expand"},
+		{"r", "refresh"},
 		{"n/N", "jump"},
 		{"y", "copy"},
 		{"t", "theme"},
@@ -123,7 +127,7 @@ func (m Model) renderHelp() string {
 	} else if m.width < breakpointWide {
 		pairs = []struct{ key, desc string }{
 			{"tab", "panel"}, {"f", "full"}, {"/", "search"},
-			{"space", "expand"}, {"?", "help"}, {"q", "quit"},
+			{"space", "expand"}, {"r", "refresh"}, {"?", "help"}, {"q", "quit"},
 		}
 	}
 

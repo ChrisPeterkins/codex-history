@@ -29,6 +29,17 @@ func (m Model) sessionListItems() []sessionListItem {
 	return items
 }
 
+func (m Model) visibleSessionRange(items []sessionListItem) (int, int) {
+	cursor := 0
+	for i, item := range items {
+		if !item.isGroupHeader && item.origIdx == m.sessionCursor {
+			cursor = i
+			break
+		}
+	}
+	return m.visibleRange(cursor, len(items), max(1, (m.contentHeight()-3)/2))
+}
+
 func (m Model) renderProjectsPanel() string {
 	w := m.projectsWidth()
 	h := m.contentHeight()
@@ -42,8 +53,12 @@ func (m Model) renderProjectsPanel() string {
 	items = append(items, title)
 
 	if len(m.projects) == 0 {
-		noData := "\n" + emptyStyle.Width(w-4).Render("No Codex\nhistory found.") +
-			"\n\n" + timestampStyle.Render("  Start a conversation\n  with Codex to\n  see it here.")
+		noData := "\n" + emptyStyle.Width(w-4).Render("No Codex\nhistory found.")
+		if m.loadError != "" {
+			noData = "\n" + toolErrorStyle.Width(w-4).Render("Could not load history:\n"+m.loadError)
+		} else {
+			noData += "\n\n" + timestampStyle.Render("  Start a conversation\n  with Codex to\n  see it here.")
+		}
 		items = append(items, noData)
 	}
 
@@ -105,19 +120,14 @@ func (m Model) renderSessionsPanel() string {
 	items = append(items, title)
 
 	if len(m.sessions) == 0 {
-		items = append(items, "\n"+emptyLogoStyle.Width(w-4).Render("◈")+"\n"+emptyStyle.Width(w-4).Render("No sessions"))
+		message := "No sessions"
+		if m.loadError != "" {
+			message = "Could not load sessions:\n" + m.loadError
+		}
+		items = append(items, "\n"+emptyLogoStyle.Width(w-4).Render("◈")+"\n"+emptyStyle.Width(w-4).Render(message))
 	} else {
 		flatItems := m.sessionListItems()
-
-		cursorFlat := 0
-		for i, item := range flatItems {
-			if !item.isGroupHeader && item.origIdx == m.sessionCursor {
-				cursorFlat = i
-				break
-			}
-		}
-
-		visibleStart, visibleEnd := m.visibleRange(cursorFlat, len(flatItems), max(1, (h-3)/2))
+		visibleStart, visibleEnd := m.visibleSessionRange(flatItems)
 		for i := visibleStart; i < visibleEnd; i++ {
 			item := flatItems[i]
 			if item.isGroupHeader {
@@ -177,9 +187,12 @@ func (m Model) renderConversationPanel() string {
 	}
 
 	scrollInfo := ""
+	if m.follow {
+		scrollInfo = tokenStyle.Render(" LIVE")
+	}
 	if m.viewport.TotalLineCount() > 0 {
 		pct := int(m.viewport.ScrollPercent() * 100)
-		scrollInfo = tokenStyle.Render(fmt.Sprintf(" %d%%", pct))
+		scrollInfo += tokenStyle.Render(fmt.Sprintf(" %d%%", pct))
 	}
 
 	header := lipgloss.JoinHorizontal(lipgloss.Center, title, scrollInfo)
@@ -187,6 +200,8 @@ func (m Model) renderConversationPanel() string {
 	var body string
 	if m.loading {
 		body = "\n\n" + emptyStyle.Width(w-6).Render(m.spinner.View()+" Loading session...")
+	} else if m.loadError != "" {
+		body = "\n\n" + toolErrorStyle.Width(w-6).Render("Could not load conversation:\n"+m.loadError)
 	} else if m.focus != panelConversation && len(m.messages) == 0 && m.sessionCursor < len(m.sessions) {
 		s := m.sessions[m.sessionCursor]
 		peek := "\n\n" + timestampStyle.Render("  Preview") + "\n\n"
@@ -259,7 +274,7 @@ func (m Model) conversationWidth() int {
 }
 
 func (m Model) contentHeight() int {
-	h := m.height - 2 // header + help bar
+	h := m.height - screenHeaderHeight - screenFooterHeight
 	if h < 5 {
 		return 5
 	}

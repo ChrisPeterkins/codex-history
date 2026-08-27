@@ -48,8 +48,9 @@ The app reads conversation data from `~/.codex/` — the same location where Cod
 | `g` / `G` | Jump to top / bottom |
 | `PgUp` / `PgDn` | Page up / page down |
 | `n` / `N` | Next / previous user message |
+| `[` / `]` | Previous / next tool call |
 | `Tab` / `Shift+Tab` | Switch panels |
-| `Enter` | Drill into next panel |
+| `Enter` | Drill into next panel / expand selected tool call |
 | `Esc` | Go back |
 
 ### Actions
@@ -59,6 +60,8 @@ The app reads conversation data from `~/.codex/` — the same location where Cod
 | `/` | Search across all conversations |
 | `Ctrl+F` | Find text within current conversation |
 | `Space` | Expand/collapse tool call at cursor |
+| `r` | Refresh projects, sessions, and current conversation |
+| `l` | Toggle live-follow for the current conversation |
 | `a` / `A` | Expand all / collapse all |
 | `m` + `a-z` | Set a bookmark |
 | `'` + `a-z` | Jump to bookmark |

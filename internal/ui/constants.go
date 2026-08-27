@@ -1,6 +1,10 @@
 package ui
 
 const (
+	screenHeaderHeight = 1
+	screenFooterHeight = 1
+	panelTopChrome     = 2 // panel border + title
+
 	// Responsive layout breakpoints (terminal column width)
 	breakpointNarrow = 60
 	breakpointMedium = 100

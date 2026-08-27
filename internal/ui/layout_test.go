@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -83,5 +84,113 @@ func TestCollapsibleSectionsAreStructuralAndDeterministic(t *testing.T) {
 	m.collapsibleSections = []sectionLine{{key: "offscreen", line: 5}}
 	if _, ok := m.activeCollapsibleSection(); ok {
 		t.Fatal("bottom boundary was treated as visible")
+	}
+}
+
+func TestLoadsRejectStaleResultsAndOwnTheirScroll(t *testing.T) {
+	m := NewModel("test")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+	m.projects = []data.Project{{Name: "project", DirName: "project"}}
+	m.sessions = []data.Session{{ID: "old"}, {ID: "new"}}
+	m.viewport.SetContent(strings.Repeat("line\n", 80))
+	m.viewport.SetYOffset(7)
+	cmd := m.selectSession(1)
+	if cmd == nil || m.scrollPositions["old"] != 7 || m.sessionCursor != 1 {
+		t.Fatalf("selection lost outgoing scroll: %#v", m.scrollPositions)
+	}
+	updated, _ = m.Update(projectsLoaded{seq: m.loadSeq - 1, projects: []data.Project{{DirName: "stale"}}})
+	m = updated.(Model)
+	updated, _ = m.Update(sessionsLoaded{projectKey: "project", seq: m.loadSeq - 1, sessions: []data.Session{{ID: "stale"}}})
+	m = updated.(Model)
+	if m.currentProjectKey() != "project" || len(m.sessions) != 2 {
+		t.Fatal("stale project or session result was accepted")
+	}
+	m.messages = []data.Message{{UUID: "kept"}}
+	updated, _ = m.Update(messagesLoaded{sessionID: "new", seq: m.loadSeq - 1, messages: []data.Message{{UUID: "stale"}}})
+	m = updated.(Model)
+	if m.messages[0].UUID != "kept" {
+		t.Fatal("stale message result was accepted")
+	}
+	updated, _ = m.Update(messagesLoaded{sessionID: "new", seq: m.loadSeq, err: errors.New("database unavailable")})
+	m = updated.(Model)
+	if m.loadError == "" || !strings.Contains(m.renderConversationPanel(), "database unavailable") {
+		t.Fatal("load error was not visible")
+	}
+}
+
+func TestToolSelectionEnterAndMouseGeometry(t *testing.T) {
+	m := NewModel("test")
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m, m.focus = updated.(Model), panelConversation
+	tool := data.ContentBlock{Type: "tool_use", ToolID: "enter", ToolName: "Bash", Input: map[string]interface{}{"command": "true"}}
+	m.messages = []data.Message{{Type: "assistant", ContentBlocks: []data.ContentBlock{tool}}}
+	m.updateConversationContent()
+	updated, _, _ = m.handlePanelKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.isCollapsed("tool:enter") {
+		t.Fatal("enter did not expand the selected tool")
+	}
+	m.viewport.SetContent(strings.Repeat("line\n", 30))
+	m.viewport.Height, m.viewport.YOffset = 5, 0
+	m.collapsibleSections = []sectionLine{{key: "first", line: 1}, {key: "second", line: 15}}
+	m.jumpToCollapsible(1)
+	if section, ok := m.activeCollapsibleSection(); !ok || section.key != "second" {
+		t.Fatalf("next tool selected %#v", section)
+	}
+	m.collapsibleSections, m.viewport.YOffset = []sectionLine{{key: "mouse", line: 0}}, 0
+	updated, _ = m.handleMouseClick(panelConversation, 0, screenHeaderHeight+panelTopChrome)
+	m = updated.(Model)
+	if m.isCollapsed("mouse") {
+		t.Fatal("layout-derived mouse click missed line zero")
+	}
+	m.sessions = []data.Session{{ID: "first", StartedAt: time.Now()}, {ID: "second", StartedAt: time.Now()}}
+	m.sessionCursor = 1
+	updated, _ = m.handleMouseClick(panelSessions, 0, screenHeaderHeight+panelTopChrome+1)
+	m = updated.(Model)
+	if m.sessionCursor != 0 {
+		t.Fatal("session mouse hit-testing ignored the date-header row")
+	}
+}
+
+func TestSearchAndRefreshRequestsAreCurrent(t *testing.T) {
+	m := NewModel("test")
+	m.searchMode, m.searchSeq = true, 2
+	m.searchResults = []SearchResult{{SessionID: "current"}}
+	updated, _ := m.Update(searchResultsMsg{seq: 1, results: []SearchResult{{SessionID: "stale"}}})
+	m = updated.(Model)
+	if m.searchResults[0].SessionID != "current" {
+		t.Fatal("stale search result was accepted")
+	}
+	m.searchInput.Focus()
+	next, cmd := m.handleSearchKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("xy")})
+	m = next.(Model)
+	if cmd == nil || !m.searching || m.searchSeq != 3 {
+		t.Fatal("search input was not debounced")
+	}
+	m.searchMode = false
+	m.projects = []data.Project{{DirName: "project"}}
+	m.sessions = []data.Session{{ID: "session"}}
+	before := m.loadSeq
+	updated, cmd, _ = m.handleActionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	m = updated.(Model)
+	if cmd == nil || !m.loading || m.loadSeq <= before {
+		t.Fatal("refresh did not start a request-aware reload")
+	}
+	updated, cmd, _ = m.handleActionKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = updated.(Model)
+	if cmd == nil || !m.follow {
+		t.Fatal("live follow did not start")
+	}
+	m.followRevision, before = "same", m.loadSeq
+	updated, cmd = m.Update(followCheckMsg{sessionID: "session", revision: "same"})
+	m = updated.(Model)
+	if cmd != nil || m.loadSeq != before {
+		t.Fatal("unchanged follow check reloaded the conversation")
+	}
+	updated, cmd = m.Update(followCheckMsg{sessionID: "session", revision: "new"})
+	m = updated.(Model)
+	if cmd == nil || m.loadSeq <= before {
+		t.Fatal("changed follow check did not reload the conversation")
 	}
 }
